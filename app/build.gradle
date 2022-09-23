@@ -38,6 +38,9 @@ apply plugin: 'kotlinx-serialization'
 android {
     compileSdkVersion 31
     buildToolsVersion '33.0.0'
+
+    namespace 'com.nextcloud.talk'
+
     defaultConfig {
         minSdkVersion 21
         targetSdkVersion 31
@@ -45,8 +48,8 @@ android {
 
         // mayor.minor.hotfix.increment (for increment: 01-50=Alpha / 51-89=RC / 90-99=stable)
         // xx   .xxx  .xx    .xx
-        versionCode 150000006
-        versionName "15.0.0 Alpha 06"
+        versionCode 150010002
+        versionName "15.1.0 Alpha 02"
 
         flavorDimensions "default"
         renderscriptTargetApi 19

@@ -23,6 +23,7 @@
 package com.nextcloud.talk.ui.dialog
 
 import android.app.Activity
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.View
 import android.view.ViewGroup
@@ -78,8 +79,14 @@ class AttachmentDialog(val activity: Activity, var chatController: ChatControlle
             dialogAttachmentBinding.menuShareLocation.visibility = View.GONE
         }
 
-        if (!CapabilitiesUtilNew.hasSpreedFeatureCapability(chatController.conversationUser, "talk-polls")) {
+        if (!CapabilitiesUtilNew.hasSpreedFeatureCapability(chatController.conversationUser, "talk-polls") ||
+            chatController.isOneToOneConversation()
+        ) {
             dialogAttachmentBinding.menuAttachPoll.visibility = View.GONE
+        }
+
+        if (!context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)) {
+            dialogAttachmentBinding.menuAttachVideoFromCam.visibility = View.GONE
         }
     }
 
@@ -96,6 +103,11 @@ class AttachmentDialog(val activity: Activity, var chatController: ChatControlle
 
         dialogAttachmentBinding.menuAttachPictureFromCam.setOnClickListener {
             chatController.sendPictureFromCamIntent()
+            dismiss()
+        }
+
+        dialogAttachmentBinding.menuAttachVideoFromCam.setOnClickListener {
+            chatController.sendVideoFromCamIntent()
             dismiss()
         }
 

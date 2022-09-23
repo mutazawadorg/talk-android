@@ -131,6 +131,7 @@
     <string name="nc_no_proxy">Be įgaliotojo serverio</string>
     <string name="nc_notification_channel_calls">Skambučiai</string>
     <string name="nc_notification_channel_messages">Žinutės</string>
+    <string name="nc_notification_channel_uploads">Įkėlimai</string>
     <string name="nc_notification_settings">Pranešimų nustatymai</string>
     <string name="nc_notify_me_always">Visada pranešti</string>
     <string name="nc_notify_me_mention">Pranešti, kai mane pamini</string>
@@ -231,7 +232,9 @@
     <string name="nc_share_text">Prisijunkite prie pokalbio, adresu %1$s/index.php/call/%2$s</string>
     <string name="nc_share_text_pass">\nSlaptažodis: %1$s</string>
     <string name="nc_share_this_location">Bendrinti šią vietą</string>
+    <string name="nc_shared_items">Bendrinami elementai</string>
     <string name="nc_shared_items_description">Paveikslai, failai, balso žinutės…</string>
+    <string name="nc_shared_items_empty">Nėra bendrinamų elementų</string>
     <string name="nc_shared_items_location">Vieta</string>
     <string name="nc_sort_by">Rikiuoti pagal</string>
     <string name="nc_start_time">Pradžios laikas</string>
@@ -261,9 +264,12 @@
     <string name="save">Įrašyti</string>
     <string name="scope_federated_description">Sinchronizuoti tik į patikimus serverius</string>
     <string name="scope_federated_title">Federacinis</string>
+    <string name="scope_local_description">Matoma tik žmonėms šiame egzemplioriuje ir svečiams</string>
     <string name="scope_local_title">Vietinis</string>
+    <string name="scope_private_description">Matoma tik žmonėms, su kuriais pokalbių programėlėje mobiliajame įrenginyje buvo rasta atitiktis per telefono numerio integraciją</string>
     <string name="scope_private_title">Privatus</string>
     <string name="scope_published_description">Sinchronizuoti į patikimus serverius ir į visuotinę bei viešą adresų knygą</string>
+    <string name="scope_published_title">Paskelbtas</string>
     <string name="secondsAgo">prieš keletą sekundžių</string>
     <string name="selected_list_item">Pasirinkta</string>
     <string name="set_status">Nustatyti būseną</string>

@@ -100,6 +100,7 @@ import com.nextcloud.talk.models.json.status.Status
 import com.nextcloud.talk.models.json.statuses.StatusesOverall
 import com.nextcloud.talk.repositories.unifiedsearch.UnifiedSearchRepository
 import com.nextcloud.talk.ui.dialog.ChooseAccountDialogFragment
+import com.nextcloud.talk.ui.dialog.ChooseAccountShareToDialogFragment
 import com.nextcloud.talk.ui.dialog.ConversationsListBottomDialog
 import com.nextcloud.talk.users.UserManager
 import com.nextcloud.talk.utils.ApiUtils
@@ -107,8 +108,8 @@ import com.nextcloud.talk.utils.AttendeePermissionsUtil
 import com.nextcloud.talk.utils.ClosedInterfaceImpl
 import com.nextcloud.talk.utils.ConductorRemapping.remapChatController
 import com.nextcloud.talk.utils.DisplayUtils
+import com.nextcloud.talk.utils.FileUtils
 import com.nextcloud.talk.utils.Mimetype
-import com.nextcloud.talk.utils.UriUtils.Companion.getFileName
 import com.nextcloud.talk.utils.bundle.BundleKeys
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_ACTIVE_CONVERSATION
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_FORWARD_HIDE_SOURCE_ROOM
@@ -121,7 +122,6 @@ import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_ROOM_ID
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_ROOM_TOKEN
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_SHARED_TEXT
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_USER_ENTITY
-import com.nextcloud.talk.utils.database.user.CapabilitiesUtilNew.getAttachmentFolder
 import com.nextcloud.talk.utils.database.user.CapabilitiesUtilNew.hasSpreedFeatureCapability
 import com.nextcloud.talk.utils.database.user.CapabilitiesUtilNew.isServerEOL
 import com.nextcloud.talk.utils.database.user.CapabilitiesUtilNew.isUnifiedSearchAvailable
@@ -181,6 +181,7 @@ class ConversationsListController(bundle: Bundle) :
     private var conversationItemsWithHeader: MutableList<AbstractFlexibleItem<*>> = ArrayList()
     private val searchableConversationItems: MutableList<AbstractFlexibleItem<*>> = ArrayList()
     private var searchItem: MenuItem? = null
+    private var chooseAccountItem: MenuItem? = null
     private var searchView: SearchView? = null
     private var searchQuery: String? = null
     private var credentials: String? = null
@@ -251,6 +252,43 @@ class ConversationsListController(bundle: Bundle) :
         }
     }
 
+    private fun loadUserAvatar(menuItem: MenuItem) {
+        if (activity != null) {
+            val imageRequest = DisplayUtils.getImageRequestForUrl(
+                ApiUtils.getUrlForAvatar(
+                    currentUser!!.baseUrl,
+                    currentUser!!.userId,
+                    true
+                ),
+                currentUser
+            )
+            val imagePipeline = Fresco.getImagePipeline()
+            val dataSource = imagePipeline.fetchDecodedImage(imageRequest, null)
+            dataSource.subscribe(
+                object : BaseBitmapDataSubscriber() {
+                    override fun onNewResultImpl(bitmap: Bitmap?) {
+                        if (bitmap != null && resources != null) {
+                            val roundedBitmapDrawable = RoundedBitmapDrawableFactory.create(
+                                resources!!,
+                                bitmap
+                            )
+                            roundedBitmapDrawable.isCircular = true
+                            roundedBitmapDrawable.setAntiAlias(true)
+                            menuItem.icon = roundedBitmapDrawable
+                        }
+                    }
+
+                    override fun onFailureImpl(dataSource: DataSource<CloseableReference<CloseableImage?>>) {
+                        if (resources != null) {
+                            menuItem.icon = ResourcesCompat.getDrawable(resources!!, R.drawable.ic_user, null)
+                        }
+                    }
+                },
+                UiThreadImmediateExecutorService.getInstance()
+            )
+        }
+    }
+
     override fun onAttach(view: View) {
         Log.d(
             TAG,
@@ -258,6 +296,9 @@ class ConversationsListController(bundle: Bundle) :
                 " Activity: " + System.identityHashCode(activity)
         )
         super.onAttach(view)
+
+        showShareToScreen = hasActivityActionSendIntent()
+
         ClosedInterfaceImpl().setUpPushTokenRegistration()
         if (!eventBus.isRegistered(this)) {
             eventBus.register(this)
@@ -329,15 +370,32 @@ class ConversationsListController(bundle: Bundle) :
 
     override fun onCreateOptionsMenu(menu: Menu, inflater: MenuInflater) {
         super.onCreateOptionsMenu(menu, inflater)
+
         inflater.inflate(R.menu.menu_conversation_plus_filter, menu)
         searchItem = menu.findItem(R.id.action_search)
+        chooseAccountItem = menu.findItem(R.id.action_choose_account)
+        loadUserAvatar(chooseAccountItem!!)
+
+        chooseAccountItem?.setOnMenuItemClickListener {
+            if (resources != null && resources!!.getBoolean(R.bool.multiaccount_support)) {
+                val newFragment: DialogFragment = ChooseAccountShareToDialogFragment.newInstance()
+                newFragment.show(
+                    (activity as MainActivity?)!!.supportFragmentManager,
+                    ChooseAccountShareToDialogFragment.TAG
+                )
+            }
+            true
+        }
         initSearchView()
     }
 
     override fun onPrepareOptionsMenu(menu: Menu) {
         super.onPrepareOptionsMenu(menu)
         searchView = MenuItemCompat.getActionView(searchItem) as SearchView
-        showShareToScreen = !showShareToScreen && hasActivityActionSendIntent()
+
+        val moreAccountsAvailable = userManager.users.blockingGet().size > 1
+        menu.findItem(R.id.action_choose_account).isVisible = showShareToScreen && moreAccountsAvailable
+
         if (showShareToScreen) {
             hideSearchBar()
             actionBar?.setTitle(R.string.send_to_three_dots)
@@ -680,7 +738,7 @@ class ConversationsListController(bundle: Bundle) :
                     val newFragment: DialogFragment = ChooseAccountDialogFragment.newInstance()
                     newFragment.show(
                         (getActivity() as MainActivity?)!!.supportFragmentManager,
-                        "ChooseAccountDialogFragment"
+                        ChooseAccountDialogFragment.TAG
                     )
                 } else {
                     router.pushController(
@@ -859,7 +917,7 @@ class ConversationsListController(bundle: Bundle) :
                     loadMoreMessages()
                 }
                 ConversationItem.VIEW_TYPE -> {
-                    showConversation((Objects.requireNonNull(item) as ConversationItem).model)
+                    handleConversation((Objects.requireNonNull(item) as ConversationItem).model)
                 }
             }
         }
@@ -871,21 +929,24 @@ class ConversationsListController(bundle: Bundle) :
             val conversationItem = absItem as ConversationItem
             if (conversationItem.model.token == conversationToken) {
                 val conversation = conversationItem.model
-                showConversation(conversation)
+                handleConversation(conversation)
             }
         }
     }
 
-    private fun showConversation(conversation: Conversation?) {
+    @Suppress("Detekt.ComplexMethod")
+    private fun handleConversation(conversation: Conversation?) {
         selectedConversation = conversation
         if (selectedConversation != null && activity != null) {
             val hasChatPermission = AttendeePermissionsUtil(selectedConversation!!.permissions).hasChatPermission(
                 currentUser!!
             )
             if (showShareToScreen) {
-                if (hasChatPermission && !isReadOnlyConversation(selectedConversation!!)) {
+                if (hasChatPermission &&
+                    !isReadOnlyConversation(selectedConversation!!) &&
+                    !selectedConversation!!.shouldShowLobby(currentUser!!)
+                ) {
                     handleSharedData()
-                    showShareToScreen = false
                 } else {
                     Toast.makeText(context, R.string.send_to_forbidden, Toast.LENGTH_LONG).show()
                 }
@@ -924,7 +985,7 @@ class ConversationsListController(bundle: Bundle) :
         if (isStoragePermissionGranted(context)) {
             val fileNamesWithLineBreaks = StringBuilder("\n")
             for (file in filesToShare!!) {
-                val filename = getFileName(Uri.parse(file), context)
+                val filename = FileUtils.getFileName(Uri.parse(file), context)
                 fileNamesWithLineBreaks.append(filename).append("\n")
             }
             val confirmationQuestion: String = if (filesToShare!!.size == 1) {
@@ -948,7 +1009,6 @@ class ConversationsListController(bundle: Bundle) :
                 }
                 .setNegativeButton(R.string.nc_no) { _, _ ->
                     Log.d(TAG, "sharing files aborted, going back to share-to screen")
-                    showShareToScreen = true
                 }
             viewThemeUtils.dialog
                 .colorMaterialAlertDialogBackground(binding.floatingActionButton.context, dialogBuilder)
@@ -960,6 +1020,10 @@ class ConversationsListController(bundle: Bundle) :
         } else {
             requestStoragePermission(this@ConversationsListController)
         }
+    }
+
+    private fun clearIntentAction() {
+        activity!!.intent.action = ""
     }
 
     override fun onItemLongClick(position: Int) {
@@ -1042,25 +1106,14 @@ class ConversationsListController(bundle: Bundle) :
             return
         }
         try {
-            var filesToShareArray: Array<String?> = arrayOfNulls(filesToShare!!.size)
-            filesToShareArray = filesToShare!!.toArray(filesToShareArray)
-            val data = Data.Builder()
-                .putStringArray(UploadAndShareFilesWorker.DEVICE_SOURCEFILES, filesToShareArray)
-                .putString(
-                    UploadAndShareFilesWorker.NC_TARGETPATH,
-                    getAttachmentFolder(currentUser!!)
+            filesToShare?.forEach {
+                UploadAndShareFilesWorker.upload(
+                    it,
+                    selectedConversation!!.token!!,
+                    selectedConversation!!.displayName!!,
+                    null
                 )
-                .putString(UploadAndShareFilesWorker.ROOM_TOKEN, selectedConversation!!.token)
-                .build()
-            val uploadWorker = OneTimeWorkRequest.Builder(UploadAndShareFilesWorker::class.java)
-                .setInputData(data)
-                .build()
-            WorkManager.getInstance().enqueue(uploadWorker)
-            Toast.makeText(
-                context,
-                context.resources.getString(R.string.nc_upload_in_progess),
-                Toast.LENGTH_LONG
-            ).show()
+            }
         } catch (e: IllegalArgumentException) {
             Toast.makeText(context, context.resources.getString(R.string.nc_upload_failed), Toast.LENGTH_LONG).show()
             Log.e(TAG, "Something went wrong when trying to upload file", e)
@@ -1097,6 +1150,7 @@ class ConversationsListController(bundle: Bundle) :
             bundle,
             false
         )
+        clearIntentAction()
     }
 
     @Subscribe(sticky = true, threadMode = ThreadMode.BACKGROUND)

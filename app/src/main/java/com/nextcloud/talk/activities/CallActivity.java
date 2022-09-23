@@ -396,7 +396,6 @@ public class CallActivity extends CallBaseActivity {
         binding.cameraButton.setOnClickListener(l -> onCameraClick());
 
         binding.hangupButton.setOnClickListener(l -> {
-            setCallState(CallStatus.LEAVING);
             hangup(true);
         });
 
@@ -700,7 +699,9 @@ public class CallActivity extends CallBaseActivity {
         if (isVoiceOnlyCall) {
             onMicrophoneClick();
         } else {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (EffortlessPermissions.hasPermissions(this, PERMISSIONS_CALL)) {
+                onPermissionsGranted();
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 requestPermissions(PERMISSIONS_CALL, 100);
             } else {
                 onRequestPermissionsResult(100, PERMISSIONS_CALL, new int[]{1, 1});
@@ -1166,8 +1167,15 @@ public class CallActivity extends CallBaseActivity {
 
     @Override
     public void onDestroy() {
+        if (localStream != null) {
+            localStream.dispose();
+            localStream = null;
+            Log.d(TAG, "Disposed localStream");
+        } else {
+            Log.d(TAG, "localStream is null");
+        }
+
         if (!currentCallStatus.equals(CallStatus.LEAVING)) {
-            setCallState(CallStatus.LEAVING);
             hangup(true);
         }
         powerManagerUtils.updatePhoneState(PowerManagerUtils.PhoneState.IDLE);
@@ -1485,6 +1493,10 @@ public class CallActivity extends CallBaseActivity {
 
     @Subscribe(threadMode = ThreadMode.BACKGROUND)
     public void onMessageEvent(WebSocketCommunicationEvent webSocketCommunicationEvent) {
+        if (CallStatus.LEAVING.equals(currentCallStatus)) {
+            return;
+        }
+
         switch (webSocketCommunicationEvent.getType()) {
             case "hello":
                 Log.d(TAG, "onMessageEvent 'hello'");
@@ -1660,6 +1672,9 @@ public class CallActivity extends CallBaseActivity {
 
     private void hangup(boolean shutDownView) {
         Log.d(TAG, "hangup! shutDownView=" + shutDownView);
+        if (shutDownView) {
+            setCallState(CallStatus.LEAVING);
+        }
         stopCallingSound();
         dispose(null);
 
@@ -1707,16 +1722,12 @@ public class CallActivity extends CallBaseActivity {
             }
         }
 
+        List<String> sessionIdsToEnd = new ArrayList<String>(peerConnectionWrapperList.size());
         for (PeerConnectionWrapper wrapper : peerConnectionWrapperList) {
-            endPeerConnection(wrapper.getSessionId(), false);
+            sessionIdsToEnd.add(wrapper.getSessionId());
         }
-
-        if (localStream != null) {
-            localStream.dispose();
-            localStream = null;
-            Log.d(TAG, "Disposed localStream");
-        } else {
-            Log.d(TAG, "localStream is null");
+        for (String sessionId : sessionIdsToEnd) {
+            endPeerConnection(sessionId, false);
         }
 
         hangupNetworkCalls(shutDownView);
@@ -1797,7 +1808,7 @@ public class CallActivity extends CallBaseActivity {
                 }
             } else {
                 Log.d(TAG, "   inCallFlag of currentSessionId: " + inCallFlag);
-                if (inCallFlag == 0) {
+                if (inCallFlag == 0 && !CallStatus.LEAVING.equals(currentCallStatus) && ApplicationWideCurrentRoomHolder.getInstance().isInCall()) {
                     Log.d(TAG, "Most probably a moderator ended the call for all.");
                     hangup(true);
                 }
@@ -1832,6 +1843,14 @@ public class CallActivity extends CallBaseActivity {
         for (String sessionId : newSessions) {
             Log.d(TAG, "   newSession joined: " + sessionId);
             getOrCreatePeerConnectionWrapperForSessionIdAndType(sessionId, VIDEO_STREAM_TYPE_VIDEO, false);
+
+            runOnUiThread(() -> {
+                setupVideoStreamForLayout(
+                    null,
+                    sessionId,
+                    false,
+                    VIDEO_STREAM_TYPE_VIDEO);
+            });
         }
 
         if (newSessions.size() > 0 && !currentCallStatus.equals(CallStatus.IN_CONVERSATION)) {
@@ -2008,6 +2027,17 @@ public class CallActivity extends CallBaseActivity {
         updateSelfVideoViewPosition();
     }
 
+    private void updateSelfVideoViewConnected(boolean connected) {
+        // FIXME In voice only calls there is no video view, so the progress bar would appear floating in the middle of
+        // nowhere. However, a way to signal that the local participant is not connected to the HPB is still need in
+        // that case.
+        if (!connected && !isVoiceOnlyCall) {
+            binding.selfVideoViewProgressBar.setVisibility(View.VISIBLE);
+        } else {
+            binding.selfVideoViewProgressBar.setVisibility(View.GONE);
+        }
+    }
+
     private void updateSelfVideoViewPosition() {
         Log.d(TAG, "updateSelfVideoViewPosition");
         if (!isInPipMode) {
@@ -2028,14 +2058,14 @@ public class CallActivity extends CallBaseActivity {
             }
 
             if (getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE) {
-                layoutParams.height = (int) getResources().getDimension(R.dimen.large_preview_dimension);
-                layoutParams.width = FrameLayout.LayoutParams.WRAP_CONTENT;
-                newXafterRotate = (float) (screenWidthDp - getResources().getDimension(R.dimen.large_preview_dimension) * 0.8);
+                layoutParams.height = (int) getResources().getDimension(R.dimen.call_self_video_short_side_length);
+                layoutParams.width = (int) getResources().getDimension(R.dimen.call_self_video_long_side_length);
+                newXafterRotate = (float) (screenWidthDp - getResources().getDimension(R.dimen.call_self_video_short_side_length) * 0.8);
 
             } else if (getResources().getConfiguration().orientation == Configuration.ORIENTATION_PORTRAIT) {
-                layoutParams.height = FrameLayout.LayoutParams.WRAP_CONTENT;
-                layoutParams.width = (int) getResources().getDimension(R.dimen.large_preview_dimension);
-                newXafterRotate = (float) (screenWidthDp - getResources().getDimension(R.dimen.large_preview_dimension) * 0.5);
+                layoutParams.height = (int) getResources().getDimension(R.dimen.call_self_video_long_side_length);
+                layoutParams.width = (int) getResources().getDimension(R.dimen.call_self_video_short_side_length);
+                newXafterRotate = (float) (screenWidthDp - getResources().getDimension(R.dimen.call_self_video_short_side_length) * 0.5);
             }
             binding.selfVideoRenderer.setLayoutParams(layoutParams);
 
@@ -2050,6 +2080,22 @@ public class CallActivity extends CallBaseActivity {
         String sessionId = peerConnectionEvent.getSessionId();
 
         if (peerConnectionEvent.getPeerConnectionEventType() ==
+            PeerConnectionEvent.PeerConnectionEventType.PEER_CONNECTED) {
+            if (webSocketClient != null && webSocketClient.getSessionId() == sessionId) {
+                updateSelfVideoViewConnected(true);
+            } else if (participantDisplayItems.get(sessionId) != null) {
+                participantDisplayItems.get(sessionId).setConnected(true);
+                participantsAdapter.notifyDataSetChanged();
+            }
+        } else if (peerConnectionEvent.getPeerConnectionEventType() ==
+            PeerConnectionEvent.PeerConnectionEventType.PEER_DISCONNECTED) {
+            if (webSocketClient != null && webSocketClient.getSessionId() == sessionId) {
+                updateSelfVideoViewConnected(false);
+            } else if (participantDisplayItems.get(sessionId) != null) {
+                participantDisplayItems.get(sessionId).setConnected(false);
+                participantsAdapter.notifyDataSetChanged();
+            }
+        } else if (peerConnectionEvent.getPeerConnectionEventType() ==
             PeerConnectionEvent.PeerConnectionEventType.PEER_CLOSED) {
             endPeerConnection(sessionId, VIDEO_STREAM_TYPE_SCREEN.equals(peerConnectionEvent.getVideoStreamType()));
         } else if (peerConnectionEvent.getPeerConnectionEventType() ==
@@ -2070,26 +2116,23 @@ public class CallActivity extends CallBaseActivity {
             PeerConnectionEvent.PeerConnectionEventType.NICK_CHANGE) {
             if (participantDisplayItems.get(sessionId) != null) {
                 participantDisplayItems.get(sessionId).setNick(peerConnectionEvent.getNick());
+                participantsAdapter.notifyDataSetChanged();
             }
-            participantsAdapter.notifyDataSetChanged();
-
         } else if (peerConnectionEvent.getPeerConnectionEventType() ==
             PeerConnectionEvent.PeerConnectionEventType.VIDEO_CHANGE && !isVoiceOnlyCall) {
             if (participantDisplayItems.get(sessionId) != null) {
                 participantDisplayItems.get(sessionId).setStreamEnabled(peerConnectionEvent.getChangeValue());
+                participantsAdapter.notifyDataSetChanged();
             }
-            participantsAdapter.notifyDataSetChanged();
-
         } else if (peerConnectionEvent.getPeerConnectionEventType() ==
             PeerConnectionEvent.PeerConnectionEventType.AUDIO_CHANGE) {
             if (participantDisplayItems.get(sessionId) != null) {
                 participantDisplayItems.get(sessionId).setAudioEnabled(peerConnectionEvent.getChangeValue());
+                participantsAdapter.notifyDataSetChanged();
             }
-            participantsAdapter.notifyDataSetChanged();
-
         } else if (peerConnectionEvent.getPeerConnectionEventType() ==
             PeerConnectionEvent.PeerConnectionEventType.PUBLISHER_FAILED) {
-            currentCallStatus = CallStatus.PUBLISHER_FAILED;
+            setCallState(CallStatus.PUBLISHER_FAILED);
             webSocketClient.clearResumeId();
             hangup(false);
         }
@@ -2242,12 +2285,20 @@ public class CallActivity extends CallBaseActivity {
                                            String session,
                                            boolean videoStreamEnabled,
                                            String videoStreamType) {
+        PeerConnectionWrapper peerConnectionWrapper = getPeerConnectionWrapperForSessionIdAndType(session,
+                                                                                                  videoStreamType);
+
+        boolean connected = false;
+        if (peerConnectionWrapper != null) {
+            PeerConnection.IceConnectionState iceConnectionState = peerConnectionWrapper.getPeerConnection().iceConnectionState();
+            connected = iceConnectionState == PeerConnection.IceConnectionState.CONNECTED ||
+                        iceConnectionState == PeerConnection.IceConnectionState.COMPLETED;
+        }
+
         String nick;
         if (hasExternalSignalingServer) {
             nick = webSocketClient.getDisplayNameForSession(session);
         } else {
-            PeerConnectionWrapper peerConnectionWrapper = getPeerConnectionWrapperForSessionIdAndType(session,
-                                                                                                      videoStreamType);
             nick = peerConnectionWrapper != null ? peerConnectionWrapper.getNick() : "";
         }
 
@@ -2271,6 +2322,7 @@ public class CallActivity extends CallBaseActivity {
 
         ParticipantDisplayItem participantDisplayItem = new ParticipantDisplayItem(userId,
                                                                                    session,
+                                                                                   connected,
                                                                                    nick,
                                                                                    urlForAvatar,
                                                                                    mediaStream,
@@ -2342,6 +2394,25 @@ public class CallActivity extends CallBaseActivity {
 
                         if (binding.callStates.errorImageView.getVisibility() != View.VISIBLE) {
                             binding.callStates.errorImageView.setVisibility(View.VISIBLE);
+                        }
+                    });
+                    break;
+                case PUBLISHER_FAILED:
+                    handler.post(() -> {
+                        // No calling sound when the publisher failed
+                        binding.callStates.callStateTextView.setText(R.string.nc_call_reconnecting);
+                        binding.callModeTextView.setText(getDescriptionForCallType());
+                        if (binding.callStates.callStateRelativeLayout.getVisibility() != View.VISIBLE) {
+                            binding.callStates.callStateRelativeLayout.setVisibility(View.VISIBLE);
+                        }
+                        if (binding.gridview.getVisibility() != View.INVISIBLE) {
+                            binding.gridview.setVisibility(View.INVISIBLE);
+                        }
+                        if (binding.callStates.callStateProgressBar.getVisibility() != View.VISIBLE) {
+                            binding.callStates.callStateProgressBar.setVisibility(View.VISIBLE);
+                        }
+                        if (binding.callStates.errorImageView.getVisibility() != View.GONE) {
+                            binding.callStates.errorImageView.setVisibility(View.GONE);
                         }
                     });
                     break;
